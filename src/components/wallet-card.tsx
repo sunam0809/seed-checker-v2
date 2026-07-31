@@ -1,8 +1,61 @@
+import { useState } from 'react';
 import { WalletInfo, maskMnemonic, truncateAddress } from '../lib/crypto';
 
 interface WalletCardProps {
   wallet: WalletInfo;
   index: number;
+}
+
+function CopyButton({ text, label }: { text: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // fallback
+      const el = document.createElement('textarea');
+      el.value = text;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs transition-all"
+      style={{
+        background: copied ? 'rgba(52,211,153,0.15)' : 'rgba(255,255,255,0.05)',
+        color: copied ? '#34d399' : '#9ca3af',
+        border: copied ? '1px solid rgba(52,211,153,0.3)' : '1px solid rgba(255,255,255,0.08)',
+      }}
+      title={label || '복사'}
+    >
+      {copied ? (
+        <>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+          복사됨
+        </>
+      ) : (
+        <>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+          </svg>
+          {label || '복사'}
+        </>
+      )}
+    </button>
+  );
 }
 
 export function WalletCard({ wallet, index }: WalletCardProps) {
@@ -60,7 +113,11 @@ export function WalletCard({ wallet, index }: WalletCardProps) {
 
       {/* Seed phrase */}
       <div className="mb-3">
-        <p className="text-xs text-gray-500 mb-1">시드문구</p>
+        <div className="flex items-center justify-between mb-1">
+          <p className="text-xs text-gray-500">시드문구</p>
+          {/* Copy full mnemonic */}
+          <CopyButton text={wallet.mnemonic} label="시드 복사" />
+        </div>
         <p
           className="text-sm text-gray-300 break-all leading-relaxed"
           style={{ fontFamily: 'JetBrains Mono, Menlo, monospace' }}
@@ -89,7 +146,12 @@ export function WalletCard({ wallet, index }: WalletCardProps) {
             </div>
             <span className="text-xs text-gray-400 font-medium">이더리움</span>
           </div>
-          <p className="text-xs text-gray-600 mb-0.5">주소</p>
+          <div className="flex items-center justify-between mb-0.5">
+            <p className="text-xs text-gray-600">주소</p>
+            {wallet.ethAddress && wallet.ethAddress !== 'error' && (
+              <CopyButton text={wallet.ethAddress} />
+            )}
+          </div>
           <p
             className="text-xs text-gray-400 truncate mb-2"
             style={{ fontFamily: 'monospace' }}
@@ -140,7 +202,12 @@ export function WalletCard({ wallet, index }: WalletCardProps) {
             </div>
             <span className="text-xs text-gray-400 font-medium">비트코인</span>
           </div>
-          <p className="text-xs text-gray-600 mb-0.5">주소</p>
+          <div className="flex items-center justify-between mb-0.5">
+            <p className="text-xs text-gray-600">주소</p>
+            {wallet.btcAddress && wallet.btcAddress !== 'error' && (
+              <CopyButton text={wallet.btcAddress} />
+            )}
+          </div>
           <p
             className="text-xs text-gray-400 truncate mb-2"
             style={{ fontFamily: 'monospace' }}

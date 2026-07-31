@@ -98,19 +98,33 @@ export function deriveEthAddress(mnemonic: string): string {
   const seed = mnemonicToSeedSync(mnemonic);
   const hdkey = HDKey.fromMasterSeed(seed);
   const child = hdkey.derive("m/44'/60'/0'/0/0");
-  const pubkey = child.publicKey;
-  if (!pubkey) throw new Error('공개키 파생 실패');
-  return ethers.computeAddress(pubkey);
+
+  // Use private key if available (more reliable than pubkey bytes)
+  if (child.privateKey) {
+    const privKeyHex = ethers.hexlify(child.privateKey);
+    const wallet = new ethers.Wallet(privKeyHex);
+    return wallet.address;
+  }
+
+  // Fallback: use pubkey → must be hex string for ethers.computeAddress
+  if (child.publicKey) {
+    const pubkeyHex = ethers.hexlify(child.publicKey);
+    return ethers.computeAddress(pubkeyHex);
+  }
+
+  throw new Error('키 파생 실패');
 }
 
 export function deriveBtcAddress(mnemonic: string): string {
   const seed = mnemonicToSeedSync(mnemonic);
   const hdkey = HDKey.fromMasterSeed(seed);
   const child = hdkey.derive("m/84'/0'/0'/0/0");
-  const pubkey = child.publicKey;
-  if (!pubkey) throw new Error('BTC 공개키 파생 실패');
 
-  const sha256Hex = ethers.sha256(pubkey);
+  if (!child.publicKey) throw new Error('BTC 공개키 파생 실패');
+
+  // sha256 needs hex string input in ethers v6
+  const pubkeyHex = ethers.hexlify(child.publicKey);
+  const sha256Hex = ethers.sha256(pubkeyHex);
   const hash160Hex = ethers.ripemd160(sha256Hex);
   const hash160Bytes = ethers.getBytes(hash160Hex);
 
@@ -169,6 +183,6 @@ export function maskMnemonic(mnemonic: string): string {
 }
 
 export function truncateAddress(address: string): string {
-  if (!address || address === 'error') return 'error';
+  if (!address || address === 'error' || address.length < 10) return address || 'error';
   return `${address.slice(0, 8)}...${address.slice(-6)}`;
 }
