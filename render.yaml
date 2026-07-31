@@ -1,7 +1,6 @@
 services:
-  - type: web
-    name: seed-phrase-balance-checker
-    env: static
+  - type: static_site
+    name: seed-checker-v2
     buildCommand: npm install && npm run build
     staticPublishPath: dist
     headers:
