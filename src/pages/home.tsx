@@ -127,7 +127,7 @@ export default function Home() {
     setIsProcessing(true);
     setProgress(0);
 
-    const BATCH = 3;
+    const BATCH = 10;
     const updated = [...initialWallets];
 
     try {
@@ -165,9 +165,9 @@ export default function Home() {
         setProgress((done / initialWallets.length) * 100);
         setWallets([...updated]);
 
-        // Small delay between batches to avoid rate limiting
+        // Short yield between batches so UI can update
         if (i + BATCH < initialWallets.length) {
-          await new Promise((r) => setTimeout(r, 300));
+          await new Promise((r) => setTimeout(r, 50));
         }
       }
     } finally {

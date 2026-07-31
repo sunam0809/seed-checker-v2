@@ -131,7 +131,7 @@ export function deriveBtcAddress(mnemonic: string): string {
   return encodeBech32('bc', 0, hash160Bytes);
 }
 
-// Free public ETH RPC endpoints (no API key required), tried in order
+// Free public ETH RPC endpoints — all tried simultaneously, fastest wins
 const ETH_RPC_ENDPOINTS = [
   'https://eth.llamarpc.com',
   'https://ethereum.publicnode.com',
@@ -147,8 +147,8 @@ export async function getEthBalance(address: string): Promise<string> {
     id: 1,
   });
 
-  let lastError = '';
-  for (const endpoint of ETH_RPC_ENDPOINTS) {
+  // Race all endpoints — take the first successful response
+  const attempts = ETH_RPC_ENDPOINTS.map(async (endpoint) => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 12000);
     try {
@@ -159,17 +159,23 @@ export async function getEthBalance(address: string): Promise<string> {
         signal: controller.signal,
       });
       clearTimeout(timeout);
-      if (!res.ok) { lastError = `HTTP ${res.status}`; continue; }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      if (data.error) { lastError = data.error.message; continue; }
+      if (data.error) throw new Error(data.error.message);
       const wei = BigInt(data.result);
       return ethers.formatEther(wei);
     } catch (e) {
       clearTimeout(timeout);
-      lastError = String(e);
+      throw e;
     }
+  });
+
+  // Promise.any: resolves as soon as any one succeeds
+  try {
+    return await Promise.any(attempts);
+  } catch {
+    throw new Error('ETH 잔액 조회 실패 (모든 RPC 응답 없음)');
   }
-  throw new Error(`ETH 잔액 조회 실패: ${lastError}`);
 }
 
 export async function getBtcBalance(address: string): Promise<string> {
