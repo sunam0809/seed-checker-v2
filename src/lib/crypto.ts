@@ -1,5 +1,5 @@
 import { mnemonicToSeedSync, validateMnemonic } from '@scure/bip39';
-import { wordlist } from '@scure/bip39/wordlists/english.js';
+import { wordlist } from '@scure/bip39/wordlists/english';
 import { HDKey } from '@scure/bip32';
 import { ethers } from 'ethers';
 
@@ -18,7 +18,7 @@ function bech32Polymod(values: number[]): number {
 }
 
 function bech32HrpExpand(hrp: string): number[] {
-  const result = [];
+  const result: number[] = [];
   for (let i = 0; i < hrp.length; i++) result.push(hrp.charCodeAt(i) >> 5);
   result.push(0);
   for (let i = 0; i < hrp.length; i++) result.push(hrp.charCodeAt(i) & 31);
@@ -68,8 +68,9 @@ export interface WalletInfo {
 export function extractSeedPhrases(text: string): string[] {
   const words = text
     .toLowerCase()
+    .replace(/[^a-z\s,;\n\r]/g, ' ')
     .split(/[\s,;\n\r]+/)
-    .filter((w) => w && wordlist.includes(w));
+    .filter((w) => w.length > 0 && wordlist.includes(w));
 
   const phrases: string[] = [];
   let i = 0;
@@ -97,7 +98,8 @@ export function deriveEthAddress(mnemonic: string): string {
   const seed = mnemonicToSeedSync(mnemonic);
   const hdkey = HDKey.fromMasterSeed(seed);
   const child = hdkey.derive("m/44'/60'/0'/0/0");
-  const pubkey = child.publicKey!;
+  const pubkey = child.publicKey;
+  if (!pubkey) throw new Error('공개키 파생 실패');
   return ethers.computeAddress(pubkey);
 }
 
@@ -105,7 +107,8 @@ export function deriveBtcAddress(mnemonic: string): string {
   const seed = mnemonicToSeedSync(mnemonic);
   const hdkey = HDKey.fromMasterSeed(seed);
   const child = hdkey.derive("m/84'/0'/0'/0/0");
-  const pubkey = child.publicKey!;
+  const pubkey = child.publicKey;
+  if (!pubkey) throw new Error('BTC 공개키 파생 실패');
 
   const sha256Hex = ethers.sha256(pubkey);
   const hash160Hex = ethers.ripemd160(sha256Hex);
@@ -115,40 +118,57 @@ export function deriveBtcAddress(mnemonic: string): string {
 }
 
 export async function getEthBalance(address: string): Promise<string> {
-  const res = await fetch('https://rpc.ankr.com/eth', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      method: 'eth_getBalance',
-      params: [address, 'latest'],
-      id: 1,
-    }),
-  });
-  const data = await res.json();
-  if (data.error) throw new Error(data.error.message);
-  const wei = BigInt(data.result);
-  return ethers.formatEther(wei);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch('https://rpc.ankr.com/eth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'eth_getBalance',
+        params: [address, 'latest'],
+        id: 1,
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`ETH RPC 오류: ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    const wei = BigInt(data.result);
+    return ethers.formatEther(wei);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export async function getBtcBalance(address: string): Promise<string> {
-  const res = await fetch(`https://mempool.space/api/address/${address}`);
-  if (!res.ok) throw new Error(`BTC API 오류: ${res.status}`);
-  const data = await res.json();
-  const funded: number = data.chain_stats.funded_txo_sum;
-  const spent: number = data.chain_stats.spent_txo_sum;
-  const satoshis = funded - spent;
-  return (satoshis / 1e8).toFixed(8);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch(`https://mempool.space/api/address/${address}`, {
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`BTC API 오류: ${res.status}`);
+    const data = await res.json();
+    const funded: number = data.chain_stats?.funded_txo_sum ?? 0;
+    const spent: number = data.chain_stats?.spent_txo_sum ?? 0;
+    const satoshis = funded - spent;
+    return (satoshis / 1e8).toFixed(8);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export function maskMnemonic(mnemonic: string): string {
   const words = mnemonic.split(' ');
-  if (words.length < 6) return mnemonic;
+  if (words.length <= 6) return mnemonic;
   const first = words.slice(0, 3).join(' ');
   const last = words.slice(-3).join(' ');
   return `${first} ... ${last}`;
 }
 
 export function truncateAddress(address: string): string {
+  if (!address || address === 'error') return 'error';
   return `${address.slice(0, 8)}...${address.slice(-6)}`;
 }

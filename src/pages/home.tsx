@@ -40,10 +40,10 @@ function GuideModal({ onClose }: { onClose: () => void }) {
           <div>
             <p className="font-semibold text-indigo-400 mb-2">입력 예시</p>
             <div className="bg-gray-900 rounded-lg p-3 font-mono text-xs space-y-2">
-              <p className="text-gray-500">— 한 줄씩 입력</p>
-              <p className="text-gray-300">word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12</p>
+              <p className="text-gray-500">— 12단어 예시</p>
+              <p className="text-gray-300">abandon ability able about above absent absorb abstract absurd abuse access accident</p>
               <p className="text-gray-500 mt-2">— 여러 개를 한 번에 붙여넣기 (자동 분리됨)</p>
-              <p className="text-gray-300 break-all">abandon ability able about above absent absorb abstract ...</p>
+              <p className="text-gray-300 break-all">abandon ability able about above absent absorb abstract absurd abuse access accident basket battle beach become before begin behave behind below benefit best betray</p>
             </div>
           </div>
           <div>
@@ -68,100 +68,140 @@ export default function Home() {
   const [progress, setProgress] = useState(0);
   const [detectedCount, setDetectedCount] = useState(0);
   const [showGuide, setShowGuide] = useState(false);
-  const abortControllerRef = useRef<AbortController | null>(null);
+  const [errorMsg, setErrorMsg] = useState('');
+  const abortRef = useRef<{ aborted: boolean }>({ aborted: false });
 
   const handleCheck = useCallback(async () => {
     if (!inputText.trim()) return;
+    setErrorMsg('');
 
-    const phrases = extractSeedPhrases(inputText);
-    setDetectedCount(phrases.length);
-
-    if (phrases.length === 0) {
-      alert('유효한 시드문구를 찾을 수 없습니다. 입력 안내를 확인해 주세요.');
+    let phrases: string[] = [];
+    try {
+      phrases = extractSeedPhrases(inputText);
+    } catch (e) {
+      setErrorMsg('시드문구 파싱 오류: ' + String(e));
       return;
     }
 
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-    abortControllerRef.current = new AbortController();
+    setDetectedCount(phrases.length);
 
-    const initialWallets: WalletInfo[] = phrases.map((mnemonic) => ({
-      mnemonic,
-      ethAddress: deriveEthAddress(mnemonic),
-      btcAddress: deriveBtcAddress(mnemonic),
-      ethBalance: '0.000000',
-      btcBalance: '0.00000000',
-      hasBalance: false,
-      isChecking: true,
-    }));
+    if (phrases.length === 0) {
+      setErrorMsg(
+        '유효한 BIP39 시드문구를 찾지 못했습니다. 영어 소문자 12단어 또는 24단어를 입력해 주세요.'
+      );
+      return;
+    }
+
+    abortRef.current = { aborted: false };
+
+    // Derive addresses first — wrap in try-catch
+    const initialWallets: WalletInfo[] = [];
+    for (const mnemonic of phrases) {
+      try {
+        const ethAddress = deriveEthAddress(mnemonic);
+        const btcAddress = deriveBtcAddress(mnemonic);
+        initialWallets.push({
+          mnemonic,
+          ethAddress,
+          btcAddress,
+          ethBalance: '0.000000',
+          btcBalance: '0.00000000',
+          hasBalance: false,
+          isChecking: true,
+        });
+      } catch (e) {
+        initialWallets.push({
+          mnemonic,
+          ethAddress: 'error',
+          btcAddress: 'error',
+          ethBalance: '0.000000',
+          btcBalance: '0.00000000',
+          hasBalance: false,
+          isChecking: false,
+          error: '주소 파생 실패: ' + String(e),
+        });
+      }
+    }
 
     setWallets(initialWallets);
     setIsProcessing(true);
     setProgress(0);
 
-    const BATCH = 5;
+    const BATCH = 3;
     const updated = [...initialWallets];
 
-    for (let i = 0; i < phrases.length; i += BATCH) {
-      if (abortControllerRef.current?.signal.aborted) break;
+    try {
+      for (let i = 0; i < initialWallets.length; i += BATCH) {
+        if (abortRef.current.aborted) break;
 
-      const batch = phrases.slice(i, i + BATCH);
-      await Promise.all(
-        batch.map(async (mnemonic, batchIdx) => {
-          const globalIdx = i + batchIdx;
-          try {
-            const [eth, btc] = await Promise.all([
-              getEthBalance(updated[globalIdx].ethAddress),
-              getBtcBalance(updated[globalIdx].btcAddress),
-            ]);
-            updated[globalIdx] = {
-              ...updated[globalIdx],
-              ethBalance: eth,
-              btcBalance: btc,
-              hasBalance: parseFloat(eth) > 0 || parseFloat(btc) > 0,
-              isChecking: false,
-            };
-          } catch (err) {
-            updated[globalIdx] = {
-              ...updated[globalIdx],
-              isChecking: false,
-              error: err instanceof Error ? err.message : '조회 실패',
-            };
-          }
-        })
-      );
+        const batchItems = initialWallets.slice(i, i + BATCH);
+        await Promise.all(
+          batchItems.map(async (wallet, batchIdx) => {
+            const globalIdx = i + batchIdx;
+            if (wallet.error) return; // skip already-errored
+            try {
+              const [eth, btc] = await Promise.all([
+                getEthBalance(wallet.ethAddress),
+                getBtcBalance(wallet.btcAddress),
+              ]);
+              updated[globalIdx] = {
+                ...updated[globalIdx],
+                ethBalance: eth,
+                btcBalance: btc,
+                hasBalance: parseFloat(eth) > 0 || parseFloat(btc) > 0,
+                isChecking: false,
+              };
+            } catch (err) {
+              updated[globalIdx] = {
+                ...updated[globalIdx],
+                isChecking: false,
+                error: err instanceof Error ? err.message : '잔액 조회 실패',
+              };
+            }
+          })
+        );
 
-      const done = Math.min(i + BATCH, phrases.length);
-      setProgress((done / phrases.length) * 100);
-      setWallets([...updated]);
+        const done = Math.min(i + BATCH, initialWallets.length);
+        setProgress((done / initialWallets.length) * 100);
+        setWallets([...updated]);
+
+        // Small delay between batches to avoid rate limiting
+        if (i + BATCH < initialWallets.length) {
+          await new Promise((r) => setTimeout(r, 300));
+        }
+      }
+    } finally {
+      setIsProcessing(false);
     }
-
-    setIsProcessing(false);
   }, [inputText]);
 
   const handleStop = () => {
-    abortControllerRef.current?.abort();
+    abortRef.current.aborted = true;
     setIsProcessing(false);
     setWallets((prev) =>
-      prev.map((w) => (w.isChecking ? { ...w, isChecking: false, error: '중단됨' } : w))
+      prev.map((w) =>
+        w.isChecking ? { ...w, isChecking: false, error: '사용자가 중단함' } : w
+      )
     );
   };
 
   const handleReset = () => {
-    abortControllerRef.current?.abort();
+    abortRef.current.aborted = true;
     setWallets([]);
     setInputText('');
     setProgress(0);
     setDetectedCount(0);
     setIsProcessing(false);
+    setErrorMsg('');
   };
 
   const walletsWithBalance = wallets.filter((w) => w.hasBalance).length;
-  const sortedWallets = [...wallets].sort((a, b) => (b.hasBalance ? 1 : 0) - (a.hasBalance ? 1 : 0));
+  const sortedWallets = [...wallets].sort(
+    (a, b) => (b.hasBalance ? 1 : 0) - (a.hasBalance ? 1 : 0)
+  );
 
   return (
-    <div className="min-h-screen bg-gray-850" style={{ backgroundColor: '#1c1e26' }}>
+    <div className="min-h-screen" style={{ backgroundColor: '#1c1e26' }}>
       {showGuide && <GuideModal onClose={() => setShowGuide(false)} />}
 
       <div className="max-w-2xl mx-auto px-4 py-8 pb-16">
@@ -181,24 +221,30 @@ export default function Home() {
             <label className="text-sm font-medium text-gray-300">시드문구 입력</label>
             <button
               onClick={() => setShowGuide(true)}
-              className="text-xs text-gray-500 hover:text-indigo-400 transition-colors flex items-center gap-1"
+              className="text-xs text-gray-500 hover:text-indigo-400 transition-colors"
             >
-              <span>?</span> 입력 안내
+              ? 입력 안내
             </button>
           </div>
           <textarea
             value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
+            onChange={(e) => {
+              setInputText(e.target.value);
+              setErrorMsg('');
+            }}
             placeholder={'시드문구를 여기에 붙여넣으세요.\n여러 개를 한 번에 입력해도 자동으로 분리됩니다.\n\n예) abandon ability able about above absent absorb abstract absurd abuse access accident'}
-            className="w-full h-40 rounded-xl border border-gray-700 bg-gray-900/70 px-4 py-3 text-sm font-mono text-gray-200 placeholder-gray-600 resize-none focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/50 transition-all scrollbar-thin"
+            className="w-full h-40 rounded-xl border border-gray-700 bg-gray-900 px-4 py-3 text-sm font-mono text-gray-200 placeholder-gray-600 resize-none focus:outline-none focus:border-indigo-500 transition-all"
+            style={{ fontFamily: 'JetBrains Mono, Menlo, monospace' }}
             disabled={isProcessing}
           />
-          {inputText && (
-            <p className="mt-1.5 text-xs text-gray-500 text-right">
-              감지된 BIP39 단어: {inputText.toLowerCase().split(/[\s,;\n\r]+/).filter(Boolean).length}개
-            </p>
-          )}
         </div>
+
+        {/* Error message */}
+        {errorMsg && (
+          <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+            ⚠ {errorMsg}
+          </div>
+        )}
 
         {/* Buttons */}
         <div className="flex gap-3 mb-6">
@@ -207,7 +253,11 @@ export default function Home() {
               <button
                 onClick={handleCheck}
                 disabled={!inputText.trim()}
-                className="flex-1 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white font-semibold py-3 text-sm transition-all active:scale-95"
+                className="flex-1 rounded-xl font-semibold py-3 text-sm transition-all active:scale-95 text-white"
+                style={{
+                  backgroundColor: inputText.trim() ? '#4f46e5' : '#374151',
+                  cursor: inputText.trim() ? 'pointer' : 'not-allowed',
+                }}
               >
                 잔액 조회 시작
               </button>
@@ -223,9 +273,13 @@ export default function Home() {
           ) : (
             <button
               onClick={handleStop}
-              className="flex-1 rounded-xl bg-red-600/80 hover:bg-red-600 text-white font-semibold py-3 text-sm transition-all active:scale-95 flex items-center justify-center gap-2"
+              className="flex-1 rounded-xl text-white font-semibold py-3 text-sm transition-all active:scale-95 flex items-center justify-center gap-2"
+              style={{ backgroundColor: '#dc2626' }}
             >
-              <div className="w-3.5 h-3.5 border-2 border-white/60 border-t-white rounded-full animate-spin"></div>
+              <span
+                className="inline-block w-3.5 h-3.5 border-2 border-white/60 border-t-white rounded-full"
+                style={{ animation: 'spin 1s linear infinite' }}
+              />
               조회 중단
             </button>
           )}
@@ -235,13 +289,20 @@ export default function Home() {
         {isProcessing && (
           <div className="mb-6">
             <div className="flex justify-between text-xs mb-2">
-              <span className="text-gray-400">잔액 조회 중... ({detectedCount}개 시드문구)</span>
-              <span className="font-mono text-indigo-400">{Math.round(progress)}%</span>
+              <span className="text-gray-400">
+                잔액 조회 중... ({detectedCount}개 시드문구)
+              </span>
+              <span className="text-indigo-400" style={{ fontFamily: 'monospace' }}>
+                {Math.round(progress)}%
+              </span>
             </div>
-            <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden">
+            <div
+              className="w-full h-2 rounded-full"
+              style={{ backgroundColor: '#1f2937' }}
+            >
               <div
-                className="h-full bg-indigo-600 rounded-full transition-all duration-300"
-                style={{ width: `${progress}%` }}
+                className="h-full rounded-full transition-all duration-300"
+                style={{ width: `${progress}%`, backgroundColor: '#4f46e5' }}
               />
             </div>
           </div>
@@ -249,15 +310,21 @@ export default function Home() {
 
         {/* Summary */}
         {wallets.length > 0 && !isProcessing && (
-          <div className="mb-6 rounded-xl border border-gray-700/60 bg-gray-800/40 p-4 text-center">
+          <div
+            className="mb-6 rounded-xl border px-4 py-4 text-center"
+            style={{ borderColor: '#374151', backgroundColor: 'rgba(31,41,55,0.5)' }}
+          >
             <span className="text-white font-semibold text-lg">{wallets.length}개</span>
             <span className="text-gray-400 mx-2">조회 완료 —</span>
-            <span className={`font-bold text-lg ${walletsWithBalance > 0 ? 'text-emerald-400' : 'text-gray-500'}`}>
+            <span
+              className="font-bold text-lg"
+              style={{ color: walletsWithBalance > 0 ? '#34d399' : '#6b7280' }}
+            >
               {walletsWithBalance}개
             </span>
             <span className="text-gray-400 ml-2">에 잔액 있음</span>
             {walletsWithBalance > 0 && (
-              <p className="text-xs text-emerald-400/70 mt-1">
+              <p className="text-xs mt-1" style={{ color: '#6ee7b7' }}>
                 ↑ 잔액이 있는 지갑이 먼저 표시됩니다
               </p>
             )}
@@ -271,15 +338,21 @@ export default function Home() {
               <WalletCard
                 key={`${wallet.mnemonic}-${index}`}
                 wallet={wallet}
-                index={sortedWallets.indexOf(wallet)}
+                index={index}
               />
             ))}
           </div>
         )}
       </div>
 
+      {/* Spinner keyframes */}
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+
       {/* Footer */}
-      <div className="fixed bottom-4 right-4 text-xs text-gray-600 font-mono pointer-events-none">
+      <div
+        className="fixed bottom-4 right-4 text-xs pointer-events-none"
+        style={{ color: '#4b5563', fontFamily: 'monospace' }}
+      >
         Made By PINALO
       </div>
     </div>
