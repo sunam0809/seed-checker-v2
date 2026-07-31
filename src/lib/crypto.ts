@@ -131,29 +131,45 @@ export function deriveBtcAddress(mnemonic: string): string {
   return encodeBech32('bc', 0, hash160Bytes);
 }
 
+// Free public ETH RPC endpoints (no API key required), tried in order
+const ETH_RPC_ENDPOINTS = [
+  'https://eth.llamarpc.com',
+  'https://ethereum.publicnode.com',
+  'https://cloudflare-eth.com',
+  'https://rpc.payload.de',
+];
+
 export async function getEthBalance(address: string): Promise<string> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
-  try {
-    const res = await fetch('https://rpc.ankr.com/eth', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'eth_getBalance',
-        params: [address, 'latest'],
-        id: 1,
-      }),
-      signal: controller.signal,
-    });
-    if (!res.ok) throw new Error(`ETH RPC 오류: ${res.status}`);
-    const data = await res.json();
-    if (data.error) throw new Error(data.error.message);
-    const wei = BigInt(data.result);
-    return ethers.formatEther(wei);
-  } finally {
-    clearTimeout(timeout);
+  const body = JSON.stringify({
+    jsonrpc: '2.0',
+    method: 'eth_getBalance',
+    params: [address, 'latest'],
+    id: 1,
+  });
+
+  let lastError = '';
+  for (const endpoint of ETH_RPC_ENDPOINTS) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      if (!res.ok) { lastError = `HTTP ${res.status}`; continue; }
+      const data = await res.json();
+      if (data.error) { lastError = data.error.message; continue; }
+      const wei = BigInt(data.result);
+      return ethers.formatEther(wei);
+    } catch (e) {
+      clearTimeout(timeout);
+      lastError = String(e);
+    }
   }
+  throw new Error(`ETH 잔액 조회 실패: ${lastError}`);
 }
 
 export async function getBtcBalance(address: string): Promise<string> {
